@@ -102,42 +102,43 @@ async def check_endpoint(req: ToolRequest):
             return {"action": "block", "reason": "Invalid path argument"}
 
         # Step 1: Strip file:// or file: URI schemes if present
-        if path_str.lower().startswith("file://"):
-            path_str = path_str[7:]
-        elif path_str.lower().startswith("file:"):
-            path_str = path_str[5:]
+        read_path = path_str
+        if read_path.lower().startswith("file://"):
+            read_path = read_path[7:]
+        elif read_path.lower().startswith("file:"):
+            read_path = read_path[5:]
 
-        # Step 2: Recursive URL decoding to prevent multi-encoded traversal
-        curr = path_str
+        # Step 2: Normalize backslashes to slashes on the original path
+        read_path = read_path.replace("\\", "/")
+
+        # Step 3: Handle relative paths on the original path
+        sandbox_dir_name = os.path.basename(SANDBOX_ROOT)
+        if not os.path.isabs(read_path):
+            if read_path.startswith(sandbox_dir_name + "/") or read_path == sandbox_dir_name:
+                parent_root = os.path.dirname(SANDBOX_ROOT)
+                read_path = os.path.join(parent_root, read_path)
+            else:
+                read_path = os.path.join(SANDBOX_ROOT, read_path)
+
+        # Step 4: Canonicalize for security check (Recursive URL decoding)
+        curr = read_path
         for _ in range(10):
             prev = curr
             curr = urllib.parse.unquote(curr)
             if curr == prev:
                 break
+        check_path = curr
 
-        # Step 3: Reject null bytes or control characters after decoding
-        if '\0' in curr:
+        # Step 5: Reject null bytes
+        if '\0' in check_path:
             return {"action": "block", "reason": "Null byte detected"}
 
-        # Step 4: Normalize backslashes to slashes
-        curr_normalized = curr.replace("\\", "/")
-
-        # Step 5: Resolve absolute vs relative paths
-        if not os.path.isabs(curr_normalized):
-            sandbox_dir_name = os.path.basename(SANDBOX_ROOT)
-            if curr_normalized.startswith(sandbox_dir_name + "/") or curr_normalized == sandbox_dir_name:
-                parent_root = os.path.dirname(SANDBOX_ROOT)
-                full_path = os.path.join(parent_root, curr_normalized)
-            else:
-                full_path = os.path.join(SANDBOX_ROOT, curr_normalized)
-        else:
-            full_path = curr_normalized
-
-        # Step 6: Validate subpath safety against SANDBOX_ROOT
-        if not is_safe_subpath(full_path, SANDBOX_ROOT):
+        # Step 6: Validate subpath safety against SANDBOX_ROOT using the decoded check_path
+        if not is_safe_subpath(check_path, SANDBOX_ROOT):
             return {"action": "block", "reason": "Path traversal detected"}
 
-        abs_read = os.path.abspath(full_path)
+        # Step 7: Read the actual file using the original read_path
+        abs_read = os.path.abspath(read_path)
 
         # Fallback for Vercel's read-only filesystem
         hardcoded_files = {
