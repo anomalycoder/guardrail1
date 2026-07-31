@@ -4,9 +4,19 @@ import os
 import urllib.parse
 import ipaddress
 import socket
+socket.setdefaulttimeout(3.0)
 import httpx
 
 app = FastAPI()
+
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=200,
+        content={"action": "block", "reason": f"Internal server error: {str(exc)}"}
+    )
 
 def setup_files():
     files_to_create = {
@@ -55,40 +65,43 @@ def is_safe_subpath(path: str, root_dir: str) -> bool:
 
 def check_url_safety(url: str):
     try:
-        parsed = urllib.parse.urlparse(url)
-    except Exception:
-        return False, "Failed to parse URL"
-    
-    if not parsed.scheme or parsed.scheme.lower() not in ["http", "https"]:
-        return False, "Scheme must be http or https"
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except Exception:
+            return False, "Failed to parse URL"
         
-    if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
-        return False, "Userinfo in URL is not allowed"
-        
-    hostname = parsed.hostname
-    if not hostname:
-        return False, "No hostname found"
-        
-    hostname_clean = hostname.lower().rstrip(".")
-    if hostname_clean not in ALLOWED_HOSTS:
-        return False, f"Host '{hostname}' is not allowed"
-        
-    try:
-        addr_info = socket.getaddrinfo(hostname_clean, None)
-        for family, socktype, proto, canonname, sockaddr in addr_info:
-            ip_str = sockaddr[0]
-            try:
-                ip = ipaddress.ip_address(ip_str)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-                    return False, f"Host resolves to unsafe IP: {ip_str}"
-                if str(ip) == "169.254.169.254":
-                    return False, "Host resolves to metadata IP"
-            except ValueError:
-                return False, f"Invalid IP: {ip_str}"
-    except socket.gaierror:
-        return False, "DNS resolution failed"
-        
-    return True, "Safe"
+        if not parsed.scheme or parsed.scheme.lower() not in ["http", "https"]:
+            return False, "Scheme must be http or https"
+            
+        if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
+            return False, "Userinfo in URL is not allowed"
+            
+        hostname = parsed.hostname
+        if not hostname:
+            return False, "No hostname found"
+            
+        hostname_clean = hostname.lower().rstrip(".")
+        if hostname_clean not in ALLOWED_HOSTS:
+            return False, f"Host '{hostname}' is not allowed"
+            
+        try:
+            addr_info = socket.getaddrinfo(hostname_clean, None)
+            for family, socktype, proto, canonname, sockaddr in addr_info:
+                ip_str = sockaddr[0]
+                try:
+                    ip = ipaddress.ip_address(ip_str)
+                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+                        return False, f"Host resolves to unsafe IP: {ip_str}"
+                    if str(ip) == "169.254.169.254":
+                        return False, "Host resolves to metadata IP"
+                except ValueError:
+                    return False, f"Invalid IP: {ip_str}"
+        except socket.gaierror:
+            return False, "DNS resolution failed"
+            
+        return True, "Safe"
+    except Exception as e:
+        return False, f"Unexpected error during URL validation: {e}"
 
 @app.get("/")
 def read_root():
